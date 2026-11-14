@@ -4,7 +4,15 @@ const std = (p: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardM
 const phys = (p: THREE.MeshPhysicalMaterialParameters) => new THREE.MeshPhysicalMaterial(p);
 
 export function createMaterials() {
-  const plastic = phys({ color: '#00959c', roughness: 0.38, clearcoat: 0.6, clearcoatRoughness: 0.2 });
+  // Low clearcoat and reduced environment reflection keep the color saturated
+  // instead of washing it out with white studio reflections.
+  const plastic = phys({
+    color: '#0099a3',
+    roughness: 0.45,
+    clearcoat: 0.15,
+    clearcoatRoughness: 0.25,
+    envMapIntensity: 0.35,
+  });
   // Thin single-surface shells (fenders, fork guards) need both faces rendered.
   const plasticDS = plastic.clone();
   plasticDS.side = THREE.DoubleSide;

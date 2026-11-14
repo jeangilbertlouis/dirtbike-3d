@@ -29,4 +29,4 @@ renderer.setAnimationLoop((time) => {
 });
 
 // Handy for poking at the rig from the browser console.
-Object.assign(window, { bike, scene, camera, controls });
+Object.assign(window, { bike, scene, camera, controls, renderer, THREE });
