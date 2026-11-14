@@ -35,6 +35,9 @@ export interface ContactInfo {
   rear: boolean;
   frontGroundY: number;
   rearGroundY: number;
+  /** Gap between each tyre and the ground when it is in the air (m). */
+  frontGap: number;
+  rearGap: number;
 }
 
 // Showroom bounce demo.
@@ -45,13 +48,20 @@ const REAR_TRAVEL = 0.07; // rad of swingarm rotation
 // All forces are per unit mass. Vertical displacements are relative to static sag.
 const G = 9.81;
 const K = 79; // spring rate per wheel → ~2 Hz body bounce
-const C = 7; // damping per wheel
+// Real shocks damp rebound far more than compression; without that the rear spring
+// dumps its stored energy at a jump lip and flips the tail up.
+const C_COMPRESSION = 6;
+const C_REBOUND = 16;
 const D0 = G / (2 * K); // static sag: each spring carries half the weight
 const EXTENSION = 0.11; // wheel can drop this far below static sag before leaving the ground
 const TRAVEL_F = 0.22; // vertical bump travel before bottoming out
 const TRAVEL_R = 0.25;
 const K_BOTTOM = 2500; // bump-stop stiffness
-const RG2 = 0.25; // pitch radius of gyration squared (m²)
+const RG2 = 0.45; // pitch radius of gyration² (m²) of bike + rider (~0.67 m)
+// Rider in the air: body weight and throttle/brake steer pitch toward the ground slope
+// below, so the bike lands roughly parallel to the landing instead of nose-diving.
+const RIDER_K = 14; // rad/s² per rad of pitch error
+const RIDER_C = 6; // 1/s pitch-rate damping
 const SUBSTEP = 1 / 240;
 
 /**
@@ -73,7 +83,7 @@ export class DirtBike {
   ground: ((trackX: number) => number) | null = null;
   /** Distance travelled along the track, in metres. */
   distance = 0;
-  readonly contact: ContactInfo = { front: true, rear: true, frontGroundY: 0, rearGroundY: 0 };
+  readonly contact: ContactInfo = { front: true, rear: true, frontGroundY: 0, rearGroundY: 0, frontGap: 0, rearGap: 0 };
 
   private parts: Part[] = [];
   private front: FrontEnd;
@@ -164,7 +174,7 @@ export class DirtBike {
       const dropR = L * (Math.sin(this.swing.baseAngle) - Math.sin(swingAngle));
       this.chassis.position.y = -(dropF + dropR) / 2;
       this.chassis.rotation.z = (dropR - dropF) / DIM.wheelbase;
-      Object.assign(this.contact, { front: true, rear: true, frontGroundY: 0, rearGroundY: 0 });
+      Object.assign(this.contact, { front: true, rear: true, frontGroundY: 0, rearGroundY: 0, frontGap: 0, rearGap: 0 });
     }
 
     this.front.slider.position.y = fComp;
@@ -210,7 +220,7 @@ export class DirtBike {
     };
     const force = (d: number, dd: number, travel: number) => {
       if (d < -D0) return 0; // spring fully extended: no push
-      let f = K * (d + D0) + C * dd;
+      let f = K * (d + D0) + (dd > 0 ? C_COMPRESSION : C_REBOUND) * dd;
       if (d > travel) f += K_BOTTOM * (d - travel);
       return Math.max(0, f);
     };
@@ -241,7 +251,17 @@ export class DirtBike {
       r.prevR = dR;
       r.V += (fF + fR - G) * h;
       r.Y += r.V * h;
-      r.W += (((fF - fR) * fx) / RG2) * h;
+      let alpha = ((fF - fR) * fx) / RG2;
+      // Rider control: full authority with both wheels off the ground,
+      // most while only one wheel is touching (the moment the bike leaves a lip or lands).
+      const offF = dF < -EXTENSION;
+      const offR = dR < -EXTENSION;
+      if (offF || offR) {
+        const slope = Math.atan2(Tf - fy - (Tr - ry), fx - rx);
+        const authority = offF && offR ? 1 : 0.65;
+        alpha += authority * (-RIDER_K * (r.th - slope) - RIDER_C * r.W);
+      }
+      r.W += alpha * h;
       r.th += r.W * h;
     }
 
@@ -251,6 +271,8 @@ export class DirtBike {
     this.contact.rear = dR > -EXTENSION;
     this.contact.frontGroundY = Tf - rf;
     this.contact.rearGroundY = Tr - rr;
+    this.contact.frontGap = Math.max(0, -(dF + EXTENSION));
+    this.contact.rearGap = Math.max(0, -(dR + EXTENSION));
 
     // Map vertical wheel displacement back onto the rig.
     const sn = Math.sin(r.th);

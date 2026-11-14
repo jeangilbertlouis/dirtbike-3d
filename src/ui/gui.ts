@@ -45,7 +45,9 @@ export function createGui({
     .name('terrain')
     .onChange((id: string) => {
       onTerrain(id);
+      if (terrain.preset.speed) bike.state.speed = terrain.preset.speed;
       if (bike.state.mode !== 'ride') modeCtl.setValue('ride');
+      gui.controllersRecursive().forEach((c) => c.updateDisplay());
     });
 
   const anim = gui.addFolder('Motion');

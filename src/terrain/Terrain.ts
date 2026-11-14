@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { tileNoise } from './noise';
 import { DIRT_TRACK, PERIOD, PRESETS, type TerrainPreset } from './presets';
@@ -11,6 +12,7 @@ const SEG_X = 840; // 0.2 m along the track
 const SEG_Z = 120;
 const MAX_ROCKS = 160;
 const MAX_TREES = 200;
+const MAX_MARKERS = 60;
 
 /**
  * Endless rough terrain. The bike stays at the origin; the mesh slides backwards
@@ -30,6 +32,7 @@ export class Terrain {
   private rockMat: THREE.MeshStandardMaterial;
   private trunks: THREE.InstancedMesh;
   private canopies: THREE.InstancedMesh;
+  private markers: THREE.InstancedMesh;
 
   constructor() {
     this.group.name = 'terrain';
@@ -76,6 +79,16 @@ export class Terrain {
     // Create the per-instance colour buffer up front so the material compiles with it.
     const white = new THREE.Color(1, 1, 1);
     for (let i = 0; i < MAX_TREES * 3; i++) this.canopies.setColorAt(i, white);
+
+    this.markers = new THREE.InstancedMesh(
+      new RoundedBoxGeometry(1.1, 0.5, 0.5, 2, 0.06),
+      new THREE.MeshStandardMaterial({ roughness: 0.6 }),
+      MAX_MARKERS * 3,
+    );
+    this.markers.castShadow = true;
+    this.markers.receiveShadow = true;
+    for (let i = 0; i < MAX_MARKERS * 3; i++) this.markers.setColorAt(i, white);
+    this.group.add(this.markers);
 
     this.rebuild();
   }
@@ -135,12 +148,37 @@ export class Terrain {
     this.rocks.instanceMatrix.needsUpdate = true;
     this.rocks.computeBoundingSphere();
 
+    // Track-edge blocks, alternating colours down both sides.
+    const mk = p.markers;
+    let nMarkers = 0;
+    if (mk) {
+      const perSide = Math.min(MAX_MARKERS / 2, Math.floor(PERIOD / mk.spacing));
+      const tint = new THREE.Color();
+      for (let j = 0; j < perSide; j++) {
+        for (const s of [-1, 1]) {
+          const x = j * mk.spacing;
+          const z = s * mk.z;
+          dummy.rotation.set(0, (rng() - 0.5) * 0.1, 0);
+          dummy.scale.set(1, 1, 1);
+          this.repeatInstance(this.markers, nMarkers, dummy, x, this.height(x, z) + 0.12, z);
+          tint.set(mk.colors[j % mk.colors.length]);
+          for (let k = 0; k < 3; k++) this.markers.setColorAt(nMarkers * 3 + k, tint);
+          nMarkers++;
+        }
+      }
+    }
+    this.markers.count = nMarkers * 3;
+    this.markers.visible = nMarkers > 0;
+    this.markers.instanceMatrix.needsUpdate = true;
+    if (this.markers.instanceColor) this.markers.instanceColor.needsUpdate = true;
+    this.markers.computeBoundingSphere();
+
     // Conifers, kept clear of the trail and the usual camera orbit.
-    const nTrees = Math.min(MAX_TREES, p.trees);
+    const nTrees = Math.min(MAX_TREES, p.trees.count);
     const green = new THREE.Color();
     for (let i = 0; i < nTrees; i++) {
       const x = rng() * PERIOD;
-      const z = side() * (4.5 + rng() ** 1.4 * 24);
+      const z = side() * (p.trees.minZ + rng() ** 1.4 * (28.5 - p.trees.minZ));
       const h = 5 + rng() * 7;
       const w = h * (0.8 + rng() * 0.4);
       dummy.rotation.set((rng() - 0.5) * 0.08, rng() * 6, (rng() - 0.5) * 0.08);

@@ -17,7 +17,7 @@ npm run build    # type-check + production build into dist/
 - Drag to orbit, scroll or pinch to zoom.
 - Settings panel (top right):
   - **Mode**: Ride terrain or Showroom.
-  - **Terrain**: Dirt track (open rolling hills) or Forest trail (steeper, with roots, embedded rocks and trees — rougher and harder).
+  - **Terrain**: Dirt track (open rolling hills), Forest trail (steeper, with roots, embedded rocks and trees — rougher and harder) or Motocross track (groomed, with a tabletop, a double and whoops). Picking a terrain also sets a suitable speed.
   - **Motion**: speed, terrain roughness, showroom bounce, steering.
   - **Colors**, race number, auto-rotate, exploded view, reset camera.
 

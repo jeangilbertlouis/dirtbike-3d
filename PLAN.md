@@ -111,3 +111,11 @@ The bike rides itself over rough terrain; the camera still orbits freely.
 - **Self-riding, not player-controlled** — ride mode is an automatic demo over terrain. Keyboard/gamepad control would be a later phase built on the same ride physics.
 - **No physics engine** — the ride model is a small hand-written spring-damper solver, which is enough for a single bike and keeps the bundle small.
 - **Code-built model** — all geometry is procedural three.js; no Blender/`.glb` assets.
+
+### Phase 6 — Motocross track and jump physics ✅ done
+- **Motocross track** preset: a hand-built profile per 56 m lap — tabletop (1.3 m), double (1.1 m takeoff over a gap), five whoops — on a groomed track with raised edges, a watered racing line, alternating track-edge blocks, grass infield and distant trees. Presets can now suggest a speed (33 km/h here, sized so the lips throw the bike onto the landings).
+- **Jump physics fix**: the rear was kicking up far more than the front (e.g. 0.86 m vs 0.30 m) and the bike nose-dived to −52° off the double, because once the front leaves the lip the still-compressed rear spring flips the tail up. Fixed with:
+  - realistic bike + rider pitch inertia (radius of gyration ≈ 0.67 m),
+  - asymmetric damping — rebound much stiffer than compression, like a real shock,
+  - a simple rider model: in the air (and partly with one wheel down) body weight and throttle/brake steer pitch toward the slope of the ground below, so the bike lands matching the landing.
+  - Result on the double: front 1.84 m / rear 1.88 m of air, pitch −5° to +28°, landing within ~5° of the slope.
