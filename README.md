@@ -17,6 +17,7 @@ npm run build    # type-check + production build into dist/
 - Drag to orbit, scroll or pinch to zoom.
 - Settings panel (top right):
   - **Mode**: Ride terrain or Showroom.
+  - **Terrain**: Dirt track (open rolling hills) or Forest trail (steeper, with roots, embedded rocks and trees — rougher and harder).
   - **Motion**: speed, terrain roughness, showroom bounce, steering.
   - **Colors**, race number, auto-rotate, exploded view, reset camera.
 
@@ -30,7 +31,8 @@ npm run build    # type-check + production build into dist/
 | `src/bike/forks.ts` | Front end: fork legs, clamps, handlebar, front wheel |
 | `src/bike/swingarm.ts` | Swingarm, rear wheel, chain |
 | `src/bike/frame.ts`, `engine.ts`, `shock.ts`, `body.ts` | Frame, engine/exhaust/radiators, rear shock, plastics and seat |
-| `src/terrain/Terrain.ts` | Endless scrolling height-field terrain (tiles every 56 m) with rocks |
+| `src/terrain/Terrain.ts` | Endless scrolling height-field terrain (tiles every 56 m) with rocks and trees |
+| `src/terrain/presets.ts` | Terrain presets: shape, colors, rocks, trees, dust and lighting per environment — add a new terrain here |
 | `src/terrain/dust.ts` | Dust particles kicked up by the tires |
 | `src/scene/` | Renderer, lighting, showroom floor, ride/showroom look switching |
 

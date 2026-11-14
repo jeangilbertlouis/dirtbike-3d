@@ -1,73 +1,93 @@
 import * as THREE from 'three';
-import { smoothstep, tileNoise } from './noise';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { tileNoise } from './noise';
+import { DIRT_TRACK, PERIOD, PRESETS, type TerrainPreset } from './presets';
 
-/** The height field repeats every PERIOD metres along X, so it can scroll forever. */
-export const PERIOD = 56;
+export { PERIOD };
+
 const LENGTH = PERIOD * 3; // mesh covers [-PERIOD, 2*PERIOD) so the view is always filled
-const WIDTH = 60;
-const SEG_X = 480;
+const HALF_WIDTH = 30;
+const SEG_X = 840; // 0.2 m along the track
 const SEG_Z = 120;
+const MAX_ROCKS = 160;
+const MAX_TREES = 200;
 
 /**
- * Endless rough dirt track. The bike stays at the origin; the terrain mesh slides
- * backwards underneath it as `distance` grows.
+ * Endless rough terrain. The bike stays at the origin; the mesh slides backwards
+ * underneath it as the bike's distance grows.
  *
  * Track coordinates: x runs along the direction of travel, z = 0 is the riding line.
+ * Shape, colours, rocks, trees and look come from the active preset.
  */
 export class Terrain {
   readonly group = new THREE.Group();
-  /** 0 = smooth rollers only, 1 = default whoops and chatter, 2 = brutal. */
+  /** 0 = smooth rollers only, 1 = default, 2 = brutal. */
   roughness = 1;
+  preset: TerrainPreset = DIRT_TRACK;
 
   private mesh: THREE.Mesh;
   private rocks: THREE.InstancedMesh;
+  private rockMat: THREE.MeshStandardMaterial;
+  private trunks: THREE.InstancedMesh;
+  private canopies: THREE.InstancedMesh;
 
   constructor() {
     this.group.name = 'terrain';
 
-    const geo = new THREE.PlaneGeometry(LENGTH, WIDTH, SEG_X, SEG_Z);
+    const geo = new THREE.PlaneGeometry(LENGTH, 2, SEG_X, SEG_Z);
     geo.rotateX(-Math.PI / 2);
     geo.translate(PERIOD / 2, 0, 0);
-    geo.setAttribute(
-      'color',
-      new THREE.BufferAttribute(new Float32Array(geo.getAttribute('position').count * 3), 3),
-    );
-    const detail = createDirtTexture();
-    detail.repeat.set(LENGTH / 2, WIDTH / 2); // 2 m tiles; PERIOD/2 is whole, so it stays seamless
+    // Pack rows toward the riding line so bumps under the tyres are well resolved.
+    const pos = geo.getAttribute('position');
+    const uv = geo.getAttribute('uv');
+    for (let i = 0; i < pos.count; i++) {
+      const u = pos.getZ(i); // -1..1
+      const z = Math.sign(u) * HALF_WIDTH * Math.pow(Math.abs(u), 1.8);
+      pos.setZ(i, z);
+      uv.setXY(i, pos.getX(i) / 2, z / 2); // 2 m texture tiles; PERIOD/2 is whole → seamless
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(pos.count * 3), 3));
     this.mesh = new THREE.Mesh(
       geo,
-      new THREE.MeshStandardMaterial({ vertexColors: true, map: detail, roughness: 0.96 }),
+      new THREE.MeshStandardMaterial({ vertexColors: true, map: createDirtTexture(), roughness: 0.96 }),
     );
     this.mesh.receiveShadow = true;
     this.group.add(this.mesh);
 
-    const rockGeo = new THREE.IcosahedronGeometry(1, 1);
-    const p = rockGeo.getAttribute('position');
-    for (let i = 0; i < p.count; i++) {
-      const k = 0.75 + 0.25 * Math.abs(tileNoise(p.getX(i) * 7, p.getZ(i) * 7 + p.getY(i) * 3, 1, 64, 9));
-      p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.7, p.getZ(i) * k);
-    }
-    rockGeo.computeVertexNormals();
-    this.rocks = new THREE.InstancedMesh(
-      rockGeo,
-      new THREE.MeshStandardMaterial({ color: '#6e655b', roughness: 0.9, flatShading: true }),
-      70 * 3,
-    );
+    this.rockMat = new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true });
+    this.rocks = new THREE.InstancedMesh(createRockGeometry(), this.rockMat, MAX_ROCKS * 3);
     this.rocks.castShadow = true;
     this.rocks.receiveShadow = true;
     this.group.add(this.rocks);
+
+    const tree = createTreeGeometries();
+    this.trunks = new THREE.InstancedMesh(
+      tree.trunk,
+      new THREE.MeshStandardMaterial({ color: '#3b2a1e', roughness: 0.95, envMapIntensity: 0.3 }),
+      MAX_TREES * 3,
+    );
+    this.canopies = new THREE.InstancedMesh(
+      tree.canopy,
+      // Tinted per instance; low env reflection keeps the foliage deep green.
+      new THREE.MeshStandardMaterial({ color: '#9fb894', roughness: 0.9, flatShading: true, envMapIntensity: 0.25 }),
+      MAX_TREES * 3,
+    );
+    this.group.add(this.trunks, this.canopies);
+    // Create the per-instance colour buffer up front so the material compiles with it.
+    const white = new THREE.Color(1, 1, 1);
+    for (let i = 0; i < MAX_TREES * 3; i++) this.canopies.setColorAt(i, white);
 
     this.rebuild();
   }
 
   /** Ground height at track coordinate (x, z). */
   height(x: number, z = 0): number {
-    const az = Math.abs(z);
-    let h = 0.85 * tileNoise(x, z, 14, PERIOD / 14, 1) + 0.3 * tileNoise(x, z, 7, PERIOD / 7, 2);
-    h += this.roughness * (0.14 * tileNoise(x, z, 2, PERIOD / 2, 3) + 0.035 * tileNoise(x, z, 0.5, PERIOD / 0.5, 4));
-    const side = smoothstep(az, 2.5, 9);
-    h += side * (0.5 * tileNoise(x, z, 4, PERIOD / 4, 5) + 0.6 * side);
-    return h;
+    return this.preset.height(x, z, this.roughness);
+  }
+
+  setPreset(id: string): void {
+    this.preset = PRESETS.find((p) => p.id === id) ?? DIRT_TRACK;
+    this.rebuild();
   }
 
   /** Slide the mesh so that the bike (at world x = 0) sits at track position `distance`. */
@@ -75,51 +95,110 @@ export class Terrain {
     this.group.position.x = -(((distance % PERIOD) + PERIOD) % PERIOD);
   }
 
-  /** Recompute heights, colours and rock placement (e.g. after a roughness change). */
+  /** Recompute heights, colours, rocks and trees for the current preset and roughness. */
   rebuild(): void {
+    const p = this.preset;
     const geo = this.mesh.geometry;
     const pos = geo.getAttribute('position');
     const col = geo.getAttribute('color');
-    const dirt = new THREE.Color('#8a6a48');
-    const light = new THREE.Color('#ad8e66');
-    const packed = new THREE.Color('#5e4632');
-    const grass = new THREE.Color('#6d6b3c');
-    const c = new THREE.Color();
+    const color = new THREE.Color();
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
       const z = pos.getZ(i);
       pos.setY(i, this.height(x, z));
-      const az = Math.abs(z);
-      c.copy(dirt).lerp(light, 0.5 + 0.5 * tileNoise(x, z, 1.75, PERIOD / 1.75, 6));
-      c.lerp(packed, 0.5 * (1 - smoothstep(az, 0.35, 1.4)));
-      const g = smoothstep(az, 4, 10) * (0.55 + 0.45 * tileNoise(x, z, 3.5, PERIOD / 3.5, 7));
-      c.lerp(grass, Math.max(0, g) * 0.75);
-      col.setXYZ(i, c.r, c.g, c.b);
+      p.color(x, z, color);
+      col.setXYZ(i, color.r, color.g, color.b);
     }
     pos.needsUpdate = true;
     col.needsUpdate = true;
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
 
-    // Rocks scattered beside the riding line, repeated once per period.
     const rng = mulberry32(42);
     const dummy = new THREE.Object3D();
-    const n = this.rocks.count / 3;
-    for (let i = 0; i < n; i++) {
+    const side = () => (rng() < 0.5 ? -1 : 1);
+
+    // Rocks beside the riding line, repeated once per period.
+    const r = p.rocks;
+    this.rockMat.color.set(r.color);
+    const nRocks = Math.min(MAX_ROCKS, r.perPeriod);
+    for (let i = 0; i < nRocks; i++) {
       const x = rng() * PERIOD;
-      const z = (rng() < 0.5 ? -1 : 1) * (2.2 + rng() * 14);
-      const s = 0.12 + rng() ** 2 * 0.55;
+      const z = side() * (r.minZ + rng() * (r.maxZ - r.minZ));
+      const s = r.minSize + rng() ** 2 * (r.maxSize - r.minSize);
       dummy.rotation.set(rng() * 6, rng() * 6, rng() * 6);
       dummy.scale.set(s * (0.8 + rng() * 0.6), s, s * (0.8 + rng() * 0.6));
-      for (let k = 0; k < 3; k++) {
-        dummy.position.set(x + (k - 1) * PERIOD, this.height(x, z) - s * 0.25, z);
-        dummy.updateMatrix();
-        this.rocks.setMatrixAt(i * 3 + k, dummy.matrix);
-      }
+      const y = this.height(x, z) - s * 0.25;
+      this.repeatInstance(this.rocks, i, dummy, x, y, z);
     }
+    this.rocks.count = nRocks * 3;
     this.rocks.instanceMatrix.needsUpdate = true;
     this.rocks.computeBoundingSphere();
+
+    // Conifers, kept clear of the trail and the usual camera orbit.
+    const nTrees = Math.min(MAX_TREES, p.trees);
+    const green = new THREE.Color();
+    for (let i = 0; i < nTrees; i++) {
+      const x = rng() * PERIOD;
+      const z = side() * (4.5 + rng() ** 1.4 * 24);
+      const h = 5 + rng() * 7;
+      const w = h * (0.8 + rng() * 0.4);
+      dummy.rotation.set((rng() - 0.5) * 0.08, rng() * 6, (rng() - 0.5) * 0.08);
+      dummy.scale.set(w, h, w);
+      this.repeatInstance(this.trunks, i, dummy, x, this.height(x, z) - 0.15, z);
+      this.repeatInstance(this.canopies, i, dummy, x, this.height(x, z) - 0.15, z);
+      green.setHSL(0.28 + rng() * 0.07, 0.45 + rng() * 0.2, 0.07 + rng() * 0.06);
+      for (let k = 0; k < 3; k++) this.canopies.setColorAt(i * 3 + k, green);
+    }
+    this.trunks.count = this.canopies.count = nTrees * 3;
+    this.trunks.visible = this.canopies.visible = nTrees > 0;
+    for (const m of [this.trunks, this.canopies]) {
+      m.instanceMatrix.needsUpdate = true;
+      m.computeBoundingSphere();
+    }
+    if (this.canopies.instanceColor) this.canopies.instanceColor.needsUpdate = true;
   }
+
+  /** Place an instance at x, x−PERIOD and x+PERIOD so it scrolls seamlessly. */
+  private repeatInstance(
+    mesh: THREE.InstancedMesh,
+    i: number,
+    dummy: THREE.Object3D,
+    x: number,
+    y: number,
+    z: number,
+  ): void {
+    for (let k = 0; k < 3; k++) {
+      dummy.position.set(x + (k - 1) * PERIOD, y, z);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i * 3 + k, dummy.matrix);
+    }
+  }
+}
+
+function createRockGeometry(): THREE.BufferGeometry {
+  const geo = new THREE.IcosahedronGeometry(1, 1);
+  const p = geo.getAttribute('position');
+  for (let i = 0; i < p.count; i++) {
+    const k = 0.75 + 0.25 * Math.abs(tileNoise(p.getX(i) * 7, p.getZ(i) * 7 + p.getY(i) * 3, 1, 64, 9));
+    p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.7, p.getZ(i) * k);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** A unit-height conifer (trunk + three stacked cones), scaled per instance. */
+function createTreeGeometries(): { trunk: THREE.BufferGeometry; canopy: THREE.BufferGeometry } {
+  const trunk = new THREE.CylinderGeometry(0.018, 0.03, 0.4, 7).translate(0, 0.2, 0);
+  const tiers: [number, number, number][] = [
+    [0.27, 0.42, 0.22],
+    [0.21, 0.38, 0.44],
+    [0.14, 0.34, 0.66],
+  ];
+  const canopy = mergeGeometries(
+    tiers.map(([r, h, y]) => new THREE.ConeGeometry(r, h, 8).translate(0, y + h / 2, 0)),
+  )!;
+  return { trunk, canopy };
 }
 
 function mulberry32(seed: number): () => number {
@@ -148,7 +227,6 @@ function createDirtTexture(): THREE.CanvasTexture {
     img.data[i * 4 + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
-  // Pebbles.
   for (let k = 0; k < 140; k++) {
     const r = 1 + rng() * 3;
     const shade = 120 + rng() * 90;

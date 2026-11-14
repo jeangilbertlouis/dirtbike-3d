@@ -4,6 +4,7 @@ import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { BikeMode, DirtBike } from '../bike/DirtBike';
 import type { Mats } from '../bike/materials';
 import { resetCamera } from '../controls/orbit';
+import { PRESETS } from '../terrain/presets';
 import type { Terrain } from '../terrain/Terrain';
 
 export interface GuiDeps {
@@ -13,18 +14,38 @@ export interface GuiDeps {
   controls: OrbitControls;
   camera: THREE.PerspectiveCamera;
   onMode: (mode: BikeMode) => void;
+  onTerrain: (presetId: string) => void;
 }
 
-export function createGui({ bike, mats: m, terrain, controls, camera, onMode }: GuiDeps): GUI {
+export function createGui({
+  bike,
+  mats: m,
+  terrain,
+  controls,
+  camera,
+  onMode,
+  onTerrain,
+}: GuiDeps): GUI {
   const gui = new GUI({ title: 'Dirt bike' });
 
-  gui
+  const modeCtl = gui
     .add(bike.state, 'mode', { 'Ride terrain': 'ride', Showroom: 'showroom' })
     .name('mode')
     .onChange((mode: BikeMode) => {
       onMode(mode);
       bounce.enable(mode === 'showroom');
       rough.enable(mode === 'ride');
+    });
+
+  // Picking a terrain also switches to ride mode, since that's where it shows.
+  const ter = { terrain: terrain.preset.id };
+  const options = Object.fromEntries(PRESETS.map((p) => [p.label, p.id]));
+  gui
+    .add(ter, 'terrain', options)
+    .name('terrain')
+    .onChange((id: string) => {
+      onTerrain(id);
+      if (bike.state.mode !== 'ride') modeCtl.setValue('ride');
     });
 
   const anim = gui.addFolder('Motion');

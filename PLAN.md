@@ -96,6 +96,13 @@ The bike rides itself over rough terrain; the camera still orbits freely.
 - **Dust** (`src/terrain/dust.ts`): soft shader point sprites kicked up at tire contact points.
 - **Mode switch** (`src/scene/modes.ts`): outdoor sky/fog/lighting vs. studio look; GUI controls for speed and terrain roughness; camera smoothly follows ride height.
 
+### Phase 5 — Terrain presets ✅ done
+- `src/terrain/presets.ts` defines each terrain as data + functions: height, ground colour, rocks, tree count, dust colour/rate, and sky/light look. The GUI's **terrain** picker lists them.
+- **Dirt track**: open rolling hills with whoops (the original terrain).
+- **Forest trail**: steeper hills, bigger whoops, roots across the line, rocks bedded into it, steep close banks, conifers, darker loam/moss colouring, damp (less) dust, hazy green light. At default settings it's roughly twice as bumpy as the dirt track, with a wheel off the ground ~30% of the time.
+- Terrain mesh rows are packed toward the riding line (0.2 m along the track) so small bumps under the tyres are resolved.
+- Suspension can now droop 11 cm below sag before a wheel leaves the ground, which is closer to a real bike.
+
 ## Definition of done (Phase 1)
 - `npm run dev` opens a page showing a recognizable dirt bike that can be orbited, zoomed, and recolored.
 - 60 fps on a typical laptop; no console errors; works in Chrome, Firefox, Edge.

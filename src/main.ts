@@ -29,9 +29,17 @@ scene.add(bike.root);
 
 const controls = createOrbit(camera, renderer.domElement);
 const setMode = (mode: typeof bike.state.mode) =>
-  applyMode(ctx, mode, floor, [terrain.group, dust.points]);
+  applyMode(ctx, mode, terrain.preset.look, floor, [terrain.group, dust.points]);
 setMode(bike.state.mode);
-createGui({ bike, mats, terrain, controls, camera, onMode: setMode });
+
+const setTerrain = (id: string) => {
+  terrain.setPreset(id);
+  dust.setColor(terrain.preset.dust.color);
+  bike.resetRide();
+  setMode(bike.state.mode);
+};
+
+createGui({ bike, mats, terrain, controls, camera, onMode: setMode, onTerrain: setTerrain });
 
 const timer = new THREE.Timer();
 renderer.setAnimationLoop((time) => {
@@ -44,9 +52,10 @@ renderer.setAnimationLoop((time) => {
     terrain.setDistance(bike.distance);
     const v = bike.state.speed / 3.6;
     const c = bike.contact;
+    const k = terrain.preset.dust.rate;
     // Tyres touch down half a wheelbase either side of the bike's centre.
-    if (c.rear) dust.emit(dt, rearAxle.x, c.rearGroundY, 4 + v * 7, v);
-    if (c.front) dust.emit(dt, frontAxle.x, c.frontGroundY, v * 1.5, v);
+    if (c.rear) dust.emit(dt, rearAxle.x, c.rearGroundY, k * (4 + v * 7), v);
+    if (c.front) dust.emit(dt, frontAxle.x, c.frontGroundY, k * v * 1.5, v);
   }
   dust.update(dt);
 

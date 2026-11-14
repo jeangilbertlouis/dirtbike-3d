@@ -47,6 +47,7 @@ const G = 9.81;
 const K = 79; // spring rate per wheel → ~2 Hz body bounce
 const C = 7; // damping per wheel
 const D0 = G / (2 * K); // static sag: each spring carries half the weight
+const EXTENSION = 0.11; // wheel can drop this far below static sag before leaving the ground
 const TRAVEL_F = 0.22; // vertical bump travel before bottoming out
 const TRAVEL_R = 0.25;
 const K_BOTTOM = 2500; // bump-stop stiffness
@@ -114,6 +115,11 @@ export class DirtBike {
       }
     });
     this.update(0);
+  }
+
+  /** Re-seat the bike on the ground (e.g. after the terrain changes under it). */
+  resetRide(): void {
+    this.ride.init = false;
   }
 
   private add(obj: THREE.Object3D, offset: [number, number, number]): Part {
@@ -203,7 +209,7 @@ export class DirtBike {
       return best;
     };
     const force = (d: number, dd: number, travel: number) => {
-      if (d < -D0) return 0; // wheel hanging free
+      if (d < -D0) return 0; // spring fully extended: no push
       let f = K * (d + D0) + C * dd;
       if (d > travel) f += K_BOTTOM * (d - travel);
       return Math.max(0, f);
@@ -241,16 +247,16 @@ export class DirtBike {
 
     this.chassis.position.y = r.Y;
     this.chassis.rotation.z = r.th;
-    this.contact.front = dF > -D0;
-    this.contact.rear = dR > -D0;
+    this.contact.front = dF > -EXTENSION;
+    this.contact.rear = dR > -EXTENSION;
     this.contact.frontGroundY = Tf - rf;
     this.contact.rearGroundY = Tr - rr;
 
     // Map vertical wheel displacement back onto the rig.
     const sn = Math.sin(r.th);
     const cs = Math.cos(r.th);
-    const fComp = THREE.MathUtils.clamp(dF, -D0, TRAVEL_F) / Math.cos(DIM.rake + r.th);
-    const rearY = rx * sn + ry * cs + r.Y + THREE.MathUtils.clamp(dR, -D0, TRAVEL_R);
+    const fComp = THREE.MathUtils.clamp(dF, -EXTENSION, TRAVEL_F) / Math.cos(DIM.rake + r.th);
+    const rearY = rx * sn + ry * cs + r.Y + THREE.MathUtils.clamp(dR, -EXTENSION, TRAVEL_R);
     const P = DIM.swingarmPivot;
     const k = P.x * sn + P.y * cs + r.Y;
     const swingAngle =

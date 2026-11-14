@@ -86,6 +86,10 @@ export class Dust {
 
   private airSpeed = 0;
 
+  setColor(color: string): void {
+    (this.points.material as THREE.ShaderMaterial).uniforms.uColor.value.set(color);
+  }
+
   update(dt: number): void {
     const drag = Math.min(1, dt * 1.2);
     for (let i = 0; i < this.count; i++) {
