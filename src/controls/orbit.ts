@@ -20,7 +20,7 @@ export function createOrbit(camera: THREE.PerspectiveCamera, dom: HTMLElement): 
 
 /** Default view, pulled back on narrow (portrait) screens so the whole bike fits. */
 export function resetCamera(camera: THREE.PerspectiveCamera, controls: OrbitControls): void {
-  const fit = Math.max(1, 1 / camera.aspect);
+  const fit = camera.aspect > 0 && Number.isFinite(camera.aspect) ? Math.max(1, 1 / camera.aspect) : 1;
   camera.position.copy(DEFAULT_CAMERA).sub(DEFAULT_TARGET).multiplyScalar(fit).add(DEFAULT_TARGET);
   controls.target.copy(DEFAULT_TARGET);
   controls.update();

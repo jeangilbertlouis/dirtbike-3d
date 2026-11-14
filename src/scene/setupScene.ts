@@ -12,7 +12,7 @@ const BACKGROUND = '#15171c';
 export function setupScene(container: HTMLElement): SceneContext {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
@@ -32,7 +32,7 @@ export function setupScene(container: HTMLElement): SceneContext {
 
   const camera = new THREE.PerspectiveCamera(
     35,
-    container.clientWidth / container.clientHeight,
+    window.innerWidth / window.innerHeight,
     0.05,
     100,
   );
@@ -61,8 +61,8 @@ export function setupScene(container: HTMLElement): SceneContext {
   scene.add(new THREE.HemisphereLight('#dfe8ff', '#202020', 0.35));
 
   window.addEventListener('resize', () => {
-    const w = container.clientWidth;
-    const h = container.clientHeight;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
