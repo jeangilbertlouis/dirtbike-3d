@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createBody } from './body';
-import { DIM } from './dimensions';
+import { DIM, frontAxle, rearAxle } from './dimensions';
 import { createEngine, createExhaust, createRadiators } from './engine';
 import { createFrame } from './frame';
 import { createFrontEnd, type FrontEnd } from './forks';
@@ -15,10 +15,13 @@ interface Part {
   offset: THREE.Vector3;
 }
 
+export type BikeMode = 'ride' | 'showroom';
+
 export interface BikeState {
-  /** Simulated ground speed in km/h (drives wheel spin). */
+  mode: BikeMode;
+  /** Ground speed in km/h (drives wheel spin, and terrain travel in ride mode). */
   speed: number;
-  /** Suspension demo bounce. */
+  /** Suspension demo bounce (showroom only). */
   bounce: boolean;
   /** Steering angle in degrees. */
   steer: number;
@@ -26,14 +29,35 @@ export interface BikeState {
   explode: number;
 }
 
-const FRONT_TRAVEL = 0.045; // m of fork travel used by the bounce demo
-const REAR_TRAVEL = 0.07; // rad of swingarm rotation used by the bounce demo
+/** Where each tyre meets the ground, for effects like dust. */
+export interface ContactInfo {
+  front: boolean;
+  rear: boolean;
+  frontGroundY: number;
+  rearGroundY: number;
+}
+
+// Showroom bounce demo.
+const FRONT_TRAVEL = 0.045; // m of fork travel
+const REAR_TRAVEL = 0.07; // rad of swingarm rotation
+
+// Ride model: a sprung chassis (heave + pitch) on two wheels that follow the ground.
+// All forces are per unit mass. Vertical displacements are relative to static sag.
+const G = 9.81;
+const K = 79; // spring rate per wheel → ~2 Hz body bounce
+const C = 7; // damping per wheel
+const D0 = G / (2 * K); // static sag: each spring carries half the weight
+const TRAVEL_F = 0.22; // vertical bump travel before bottoming out
+const TRAVEL_R = 0.25;
+const K_BOTTOM = 2500; // bump-stop stiffness
+const RG2 = 0.25; // pitch radius of gyration squared (m²)
+const SUBSTEP = 1 / 240;
 
 /**
  * Assembles the procedural parts into one rig:
  *
  *   DirtBike (root)
- *   └── chassis (pitches/drops with suspension)
+ *   └── chassis (heaves/pitches with suspension)
  *       ├── frame, engine, exhaust, radiators, body plastics, shock
  *       ├── frontEnd pivot → steer → slider → front wheel
  *       └── swingarm pivot → rear wheel, chain, sprockets
@@ -42,7 +66,13 @@ export class DirtBike {
   readonly root = new THREE.Group();
   readonly chassis = new THREE.Group();
   readonly plates = new NumberPlates('27');
-  readonly state: BikeState = { speed: 12, bounce: true, steer: 0, explode: 0 };
+  readonly state: BikeState = { mode: 'ride', speed: 25, bounce: true, steer: 0, explode: 0 };
+
+  /** Ground height at a track position (ride mode). Set by whoever owns the terrain. */
+  ground: ((trackX: number) => number) | null = null;
+  /** Distance travelled along the track, in metres. */
+  distance = 0;
+  readonly contact: ContactInfo = { front: true, rear: true, frontGroundY: 0, rearGroundY: 0 };
 
   private parts: Part[] = [];
   private front: FrontEnd;
@@ -51,6 +81,7 @@ export class DirtBike {
   private shockPart: Part;
   private time = 0;
   private explodeEased = 0;
+  private ride = { init: false, Y: 0, V: 0, th: 0, W: 0, prevF: 0, prevR: 0 };
 
   constructor(m: Mats) {
     this.root.name = 'DirtBike';
@@ -98,31 +129,41 @@ export class DirtBike {
 
     // Wheel spin from ground speed: ω = v / r.
     const v = s.speed / 3.6;
-    const wf = v / DIM.front.radius;
     const wr = v / DIM.rear.radius;
-    this.front.wheel.spin.rotation.z -= wf * dt;
+    this.front.wheel.spin.rotation.z -= (v / DIM.front.radius) * dt;
     this.swing.wheel.spin.rotation.z -= wr * dt;
     this.swing.frontSprocket.rotation.z -=
       wr * (DIM.rearSprocket.teeth / DIM.frontSprocket.teeth) * dt;
 
-    // Suspension.
-    let fComp = 0;
-    let rComp = 0;
-    if (s.bounce) {
-      fComp = FRONT_TRAVEL * (0.5 + 0.5 * Math.sin(this.time * 2.4));
-      rComp = REAR_TRAVEL * (0.5 + 0.5 * Math.sin(this.time * 2.4 - 0.6));
-    }
-    this.front.slider.position.y = fComp;
-    const swingAngle = this.swing.baseAngle - rComp;
-    this.swing.group.rotation.z = swingAngle;
-    this.front.steer.rotation.y = THREE.MathUtils.degToRad(s.steer);
+    let fComp: number;
+    let swingAngle: number;
+    let steer = s.steer;
 
-    // Keep both tyres on the ground: drop and pitch the chassis by what the wheels rose.
-    const L = this.swing.length;
-    const dropF = fComp * Math.cos(DIM.rake);
-    const dropR = L * (Math.sin(this.swing.baseAngle) - Math.sin(swingAngle));
-    this.chassis.position.y = -(dropF + dropR) / 2;
-    this.chassis.rotation.z = (dropR - dropF) / DIM.wheelbase;
+    if (s.mode === 'ride' && this.ground) {
+      ({ fComp, swingAngle } = this.stepRide(dt, v, this.ground));
+      // A little rider input so it doesn't look like it's on rails.
+      steer += 3 * Math.sin(this.time * 0.9) + 1.5 * Math.sin(this.time * 2.3);
+    } else {
+      this.ride.init = false;
+      let rComp = 0;
+      fComp = 0;
+      if (s.bounce) {
+        fComp = FRONT_TRAVEL * (0.5 + 0.5 * Math.sin(this.time * 2.4));
+        rComp = REAR_TRAVEL * (0.5 + 0.5 * Math.sin(this.time * 2.4 - 0.6));
+      }
+      swingAngle = this.swing.baseAngle - rComp;
+      // Keep both tyres on the floor: drop and pitch the chassis by what the wheels rose.
+      const L = this.swing.length;
+      const dropF = fComp * Math.cos(DIM.rake);
+      const dropR = L * (Math.sin(this.swing.baseAngle) - Math.sin(swingAngle));
+      this.chassis.position.y = -(dropF + dropR) / 2;
+      this.chassis.rotation.z = (dropR - dropF) / DIM.wheelbase;
+      Object.assign(this.contact, { front: true, rear: true, frontGroundY: 0, rearGroundY: 0 });
+    }
+
+    this.front.slider.position.y = fComp;
+    this.swing.group.rotation.z = swingAngle;
+    this.front.steer.rotation.y = THREE.MathUtils.degToRad(steer);
 
     // Exploded view (eased toward the target).
     this.explodeEased += (s.explode - this.explodeEased) * Math.min(1, dt * 8 || 1);
@@ -137,5 +178,83 @@ export class DirtBike {
       new THREE.Vector3(P.x + mnt.x, P.y + mnt.y, 0),
     );
     this.shock.group.position.addScaledVector(this.shockPart.offset, e);
+  }
+
+  /**
+   * Integrates chassis heave/pitch over the terrain and returns the rig's
+   * fork compression (along the steering axis) and swingarm angle.
+   */
+  private stepRide(dt: number, v: number, ground: (x: number) => number) {
+    const r = this.ride;
+    const rf = DIM.front.radius;
+    const rr = DIM.rear.radius;
+    const fx = frontAxle.x;
+    const fy = frontAxle.y;
+    const rx = rearAxle.x;
+    const ry = rearAxle.y;
+
+    // Axle height at which a wheel of radius `rad` just touches the ground under it.
+    const contactY = (x: number, rad: number) => {
+      let best = -Infinity;
+      for (let k = -4; k <= 4; k++) {
+        const dx = (k / 4) * rad * 0.9;
+        best = Math.max(best, ground(this.distance + x + dx) + Math.sqrt(rad * rad - dx * dx));
+      }
+      return best;
+    };
+    const force = (d: number, dd: number, travel: number) => {
+      if (d < -D0) return 0; // wheel hanging free
+      let f = K * (d + D0) + C * dd;
+      if (d > travel) f += K_BOTTOM * (d - travel);
+      return Math.max(0, f);
+    };
+
+    if (!r.init) {
+      const tf = contactY(fx, rf) - fy;
+      const tr = contactY(rx, rr) - ry;
+      Object.assign(r, { init: true, Y: (tf + tr) / 2, V: 0, th: (tf - tr) / (fx - rx), W: 0, prevF: 0, prevR: 0 });
+    }
+
+    const steps = Math.max(1, Math.ceil(dt / SUBSTEP));
+    const h = dt / steps;
+    let dF = 0;
+    let dR = 0;
+    let Tf = 0;
+    let Tr = 0;
+    for (let i = 0; i < steps; i++) {
+      this.distance += v * h;
+      const sn = Math.sin(r.th);
+      const cs = Math.cos(r.th);
+      Tf = contactY(fx, rf);
+      Tr = contactY(rx, rr);
+      dF = Tf - (fx * sn + fy * cs + r.Y);
+      dR = Tr - (rx * sn + ry * cs + r.Y);
+      const fF = force(dF, (dF - r.prevF) / h, TRAVEL_F);
+      const fR = force(dR, (dR - r.prevR) / h, TRAVEL_R);
+      r.prevF = dF;
+      r.prevR = dR;
+      r.V += (fF + fR - G) * h;
+      r.Y += r.V * h;
+      r.W += (((fF - fR) * fx) / RG2) * h;
+      r.th += r.W * h;
+    }
+
+    this.chassis.position.y = r.Y;
+    this.chassis.rotation.z = r.th;
+    this.contact.front = dF > -D0;
+    this.contact.rear = dR > -D0;
+    this.contact.frontGroundY = Tf - rf;
+    this.contact.rearGroundY = Tr - rr;
+
+    // Map vertical wheel displacement back onto the rig.
+    const sn = Math.sin(r.th);
+    const cs = Math.cos(r.th);
+    const fComp = THREE.MathUtils.clamp(dF, -D0, TRAVEL_F) / Math.cos(DIM.rake + r.th);
+    const rearY = rx * sn + ry * cs + r.Y + THREE.MathUtils.clamp(dR, -D0, TRAVEL_R);
+    const P = DIM.swingarmPivot;
+    const k = P.x * sn + P.y * cs + r.Y;
+    const swingAngle =
+      Math.asin(THREE.MathUtils.clamp((k - rearY) / this.swing.length, -1, 1)) - r.th;
+    return { fComp, swingAngle };
   }
 }

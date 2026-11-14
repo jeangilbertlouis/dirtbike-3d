@@ -1,17 +1,42 @@
 import type * as THREE from 'three';
 import GUI from 'lil-gui';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { DirtBike } from '../bike/DirtBike';
+import type { BikeMode, DirtBike } from '../bike/DirtBike';
 import type { Mats } from '../bike/materials';
 import { resetCamera } from '../controls/orbit';
+import type { Terrain } from '../terrain/Terrain';
 
-export function createGui(
-  bike: DirtBike,
-  m: Mats,
-  controls: OrbitControls,
-  camera: THREE.PerspectiveCamera,
-): GUI {
+export interface GuiDeps {
+  bike: DirtBike;
+  mats: Mats;
+  terrain: Terrain;
+  controls: OrbitControls;
+  camera: THREE.PerspectiveCamera;
+  onMode: (mode: BikeMode) => void;
+}
+
+export function createGui({ bike, mats: m, terrain, controls, camera, onMode }: GuiDeps): GUI {
   const gui = new GUI({ title: 'Dirt bike' });
+
+  gui
+    .add(bike.state, 'mode', { 'Ride terrain': 'ride', Showroom: 'showroom' })
+    .name('mode')
+    .onChange((mode: BikeMode) => {
+      onMode(mode);
+      bounce.enable(mode === 'showroom');
+      rough.enable(mode === 'ride');
+    });
+
+  const anim = gui.addFolder('Motion');
+  anim.add(bike.state, 'speed', 0, 60, 1).name('speed (km/h)');
+  const rough = anim
+    .add(terrain, 'roughness', 0, 2, 0.05)
+    .name('terrain roughness')
+    .onFinishChange(() => terrain.rebuild());
+  const bounce = anim.add(bike.state, 'bounce').name('bounce (showroom)');
+  anim.add(bike.state, 'steer', -35, 35, 1).name('steering (°)');
+  bounce.enable(bike.state.mode === 'showroom');
+  rough.enable(bike.state.mode === 'ride');
 
   const colorGroups: Record<string, THREE.MeshStandardMaterial[]> = {
     plastics: [m.plastic, m.plasticDS],
@@ -28,6 +53,7 @@ export function createGui(
     colors[key] = '#' + list[0].color.getHexString();
     cf.addColor(colors, key).onChange((v: string) => list.forEach((mat) => mat.color.set(v)));
   }
+  cf.close();
 
   const look = { number: bike.plates.number };
   gui
@@ -39,11 +65,6 @@ export function createGui(
   view.add(controls, 'autoRotate').name('auto-rotate');
   view.add(bike.state, 'explode', 0, 1, 0.01).name('exploded view');
   view.add({ reset: () => resetCamera(camera, controls) }, 'reset').name('reset camera');
-
-  const anim = gui.addFolder('Animation');
-  anim.add(bike.state, 'speed', 0, 60, 1).name('wheel speed (km/h)');
-  anim.add(bike.state, 'bounce').name('suspension bounce');
-  anim.add(bike.state, 'steer', -35, 35, 1).name('steering (°)');
 
   if (window.innerWidth < 700) gui.close();
   return gui;

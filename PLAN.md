@@ -1,6 +1,6 @@
 # Dirtbike 3D — Implementation Plan
 
-A 3D dirt bike rendered in the browser with **three.js**, viewed in an interactive showroom. The model is **built entirely in code** — no external 3D model files. Riding/gameplay is out of scope for now.
+A 3D dirt bike rendered in the browser with **three.js**. By default it rides on its own over endless procedural terrain; a showroom mode shows it on a studio floor. The model is **built entirely in code** — no external 3D model files. Player-controlled riding is out of scope for now.
 
 ## Tech stack
 
@@ -85,14 +85,22 @@ DirtBike (Group)
 - Post-processing: SSAO or SMAA via `EffectComposer` (keep optional for performance).
 - Loading screen, responsive UI, mobile touch orbit.
 
-### Phase 3 — Ship
-- `npm run build`, deploy `dist/` to GitHub Pages via a GitHub Action.
+### Phase 3 — Ship (deploy ✅ done)
+- `npm run build`, deploy `dist/` to GitHub Pages via a GitHub Action. ✅
 - Performance pass: merge static geometry, instancing, cap pixel ratio at 2, check on a mid-range phone.
+
+### Phase 4 — Ride mode ✅ done
+The bike rides itself over rough terrain; the camera still orbits freely.
+- **Terrain** (`src/terrain/Terrain.ts`): procedural height field from layered value noise that tiles every 56 m along the direction of travel, so the mesh can scroll forever without a seam. Rolling hills, whoops and fine chatter on the riding line, rising banks and scattered rocks beside it. Vertex-colored dirt plus a canvas-drawn grit texture.
+- **Ride physics** (`DirtBike.stepRide`): the bike stays at the origin while the terrain slides under it. The chassis is a sprung mass with heave and pitch on two spring-damper wheels (~2 Hz), integrated at 240 Hz. Each wheel follows the ground profile under its full radius, tops out when the ground drops away (airtime) and hits a bump stop at full travel. Fork compression and swingarm angle are mapped back onto the rig, so the shock and forks visibly work.
+- **Dust** (`src/terrain/dust.ts`): soft shader point sprites kicked up at tire contact points.
+- **Mode switch** (`src/scene/modes.ts`): outdoor sky/fog/lighting vs. studio look; GUI controls for speed and terrain roughness; camera smoothly follows ride height.
 
 ## Definition of done (Phase 1)
 - `npm run dev` opens a page showing a recognizable dirt bike that can be orbited, zoomed, and recolored.
 - 60 fps on a typical laptop; no console errors; works in Chrome, Firefox, Edge.
 
 ## Decisions
-- **Viewer only** — no riding, physics or terrain for now. The named rig pivots keep the door open to add that later.
+- **Self-riding, not player-controlled** — ride mode is an automatic demo over terrain. Keyboard/gamepad control would be a later phase built on the same ride physics.
+- **No physics engine** — the ride model is a small hand-written spring-damper solver, which is enough for a single bike and keeps the bundle small.
 - **Code-built model** — all geometry is procedural three.js; no Blender/`.glb` assets.

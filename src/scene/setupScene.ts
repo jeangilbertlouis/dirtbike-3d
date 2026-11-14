@@ -5,6 +5,9 @@ export interface SceneContext {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
+  key: THREE.DirectionalLight;
+  rim: THREE.DirectionalLight;
+  hemi: THREE.HemisphereLight;
 }
 
 const BACKGROUND = '#15171c';
@@ -59,7 +62,8 @@ export function setupScene(container: HTMLElement): SceneContext {
   rim.position.set(-3, 2.5, -2.5);
   scene.add(rim);
 
-  scene.add(new THREE.HemisphereLight('#dfe8ff', '#202020', 0.35));
+  const hemi = new THREE.HemisphereLight('#dfe8ff', '#202020', 0.35);
+  scene.add(hemi);
 
   window.addEventListener('resize', () => {
     const w = window.innerWidth;
@@ -69,5 +73,5 @@ export function setupScene(container: HTMLElement): SceneContext {
     renderer.setSize(w, h);
   });
 
-  return { renderer, scene, camera };
+  return { renderer, scene, camera, key, rim, hemi };
 }
