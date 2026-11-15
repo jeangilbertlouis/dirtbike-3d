@@ -93,9 +93,9 @@ function barClamp(m: Mats, width: number, mat: THREE.Material): THREE.Group {
 
 /**
  * Forged lever blade around its pivot (the origin). Top-view outline in
- * (forward, outward) coordinates, extruded vertically, then bent: the blade bows
- * forward and sweeps back toward the grip (so fingers wrap round it), curves
- * progressively down, and tapers toward the tip, which ends in a safety ball.
+ * (forward, outward) coordinates, extruded vertically, then bent: the blade
+ * leaves the pivot boss smoothly and bows away from the bar through the middle,
+ * curves progressively down, and tapers toward the tip, which ends in a safety ball.
  */
 function leverBlade(
   m: Mats,
@@ -122,7 +122,7 @@ function leverBlade(
     [0.011 - tb, L, 0.003],
     [0.002 - tb, L, 0.003],
     ...edge(0.002 - tb, L - 0.004, 0.005, 0.04),
-    [-0.002, 0.017, 0.01],
+    [0.001, 0.021, 0.012],
     [-0.012, 0.003, 0.006],
     [-0.009, -0.01, 0.006],
   ]);
@@ -131,7 +131,9 @@ function leverBlade(
     const u = Math.min(1, Math.max(0, (s - root) / (L - root)));
     return {
       u,
-      dx: bow * Math.sin(Math.PI * Math.pow(u, 0.85)) * (1 - 0.25 * u),
+      // sin² leaves the boss with zero slope (no kink or dip at the pivot),
+      // bows away from the bar through the middle and eases back at the tip.
+      dx: bow * Math.sin(Math.PI * u) ** 2,
       dy: -drop * Math.pow(u, 1.8),
     };
   };
@@ -218,7 +220,7 @@ export function createBrakeLever(m: Mats): BarControl {
   const pivot = v3(0.054, 0, 0.016);
   g.add(ears(m.leverBody, 0.04, pivot, 0.022));
   g.add(pivotBolt(m, pivot));
-  const lever = leverBlade(m, 0.15, 0.024, 0.011, 0.008);
+  const lever = leverBlade(m, 0.15, 0.024, 0.011, 0.004);
   lever.position.copy(pivot);
   g.add(lever);
   g.add(cyl(0.0022, 0.006, m.steel, v3(pivot.x + 0.019, 0, pivot.z - 0.004), 'x', 10));
@@ -255,7 +257,7 @@ export function createClutchLever(m: Mats): BarControl {
   const pivot = v3(0.047, 0, 0.014);
   g.add(ears(m.leverBody, 0.03, pivot, 0.02));
   g.add(pivotBolt(m, pivot));
-  const lever = leverBlade(m, 0.158, 0.028, 0.012, 0.008);
+  const lever = leverBlade(m, 0.158, 0.028, 0.012, 0.004);
   lever.position.copy(pivot);
   g.add(lever);
   // Inner cable and its nipple seated in the lever.
