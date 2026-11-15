@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { DIM, headCenter } from './dimensions';
+import { createBrakeLever, createClutchLever, createKillSwitch } from './levers';
 import type { Mats } from './materials';
 import { mesh, rod, tube, v3 } from './util';
 import { createCaliper, createWheel, type Wheel } from './wheels';
@@ -109,27 +110,92 @@ export function createFrontEnd(m: Mats, fender: THREE.Object3D, plate: THREE.Obj
     steer.add(rod(P(t0), P(t1), 0.0175, m.rubber, 16));
   }
   steer.add(rod(P(0.795), P(0.83), 0.021, m.dark, 16)); // throttle housing
-  steer.add(rod(P(0.19), P(0.215), 0.019, m.bar, 16)); // clutch perch
 
-  const master = mesh(new RoundedBoxGeometry(0.05, 0.035, 0.035, 2, 0.006), m.dark);
-  master.position.copy(local(barC, 0.0, 0.03, 0.235));
-  steer.add(master);
+  // Brake (right) and clutch (left) perches, oriented along the bar where they clamp.
+  const upLocal = v3(sa, ca, 0); // world up in steering space
+  const tAtZ = (z: number) => {
+    let lo = 0.5;
+    let hi = 1;
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      if (barCurve.getPoint(mid).z < z) lo = mid;
+      else hi = mid;
+    }
+    return lo;
+  };
+  /** Mount a bar-local control (built for the right side) at |z| on the bar. */
+  const onBar = (obj: THREE.Object3D, z: number, left: boolean) => {
+    const t = tAtZ(z);
+    const zAx = barCurve.getTangent(t).normalize();
+    const yAx = upLocal.clone().addScaledVector(zAx, -upLocal.dot(zAx)).normalize();
+    const xAx = new THREE.Vector3().crossVectors(yAx, zAx);
+    obj.position.copy(barCurve.getPoint(t));
+    obj.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAx, yAx, zAx));
+    if (!left) {
+      steer.add(obj);
+      return;
+    }
+    const mirror = new THREE.Group();
+    mirror.scale.z = -1; // the bar is symmetric, so the left side is a mirror image
+    mirror.add(obj);
+    steer.add(mirror);
+  };
+  /** Position of an object's origin in steering space. */
+  const inSteer = (o: THREE.Object3D) => {
+    const p = new THREE.Vector3();
+    for (let n: THREE.Object3D | null = o; n && n !== steer; n = n.parent) {
+      n.updateMatrix();
+      p.applyMatrix4(n.matrix);
+    }
+    return p;
+  };
 
-  for (const s of [-1, 1]) {
-    steer.add(
-      tube(
-        [
-          local(barC, -0.025, 0.025, s * 0.25),
-          local(barC, 0.035, 0.015, s * 0.27),
-          local(barC, 0.055, -0.005, s * 0.33),
-          local(barC, 0.035, -0.015, s * 0.39),
-        ],
-        0.0055,
-        m.bar,
-        24,
-      ),
-    );
+  const brake = createBrakeLever(m);
+  onBar(brake.group, 0.205, false);
+  const clutch = createClutchLever(m);
+  onBar(clutch.group, 0.236, true);
+  onBar(createKillSwitch(m), 0.212, true);
+
+  // Brake hose: from the banjo, down behind the number plate, clipped to the
+  // bottom clamp and the left fork leg on its way to the caliper.
+  const bp = inSteer(brake.port);
+  steer.add(
+    tube(
+      [
+        bp,
+        local(bp, 0.012, -0.03, -0.012),
+        v3(0.06, 0.1, 0.08),
+        v3(0.062, 0.0, -0.03),
+        v3(0.06, -0.09, -0.098),
+        v3(0.055, -0.2, -0.104),
+        v3(0.052, -0.3, -0.104),
+      ],
+      0.0042,
+      m.hose,
+      96,
+    ),
+  );
+  for (const y of [-0.09, -0.3]) {
+    steer.add(rod(v3(0.06, y - 0.009, -0.1), v3(0.06, y + 0.009, -0.1), 0.0065, m.dark, 10));
   }
+
+  // Clutch cable: loops forward from the adjuster and back down the left side.
+  const cp = inSteer(clutch.port);
+  steer.add(
+    tube(
+      [
+        cp,
+        local(cp, 0.02, -0.006, 0.03),
+        v3(0.05, 0.06, -0.15),
+        v3(0.01, -0.06, -0.152),
+        v3(-0.04, -0.13, -0.135),
+        v3(-0.09, -0.17, -0.12),
+      ],
+      0.0036,
+      m.hose,
+      96,
+    ),
+  );
 
   // Front fender (mounted to the bottom clamp) and number plate.
   const bracket = mesh(new RoundedBoxGeometry(0.08, 0.06, 0.12, 2, 0.01), m.dark);
