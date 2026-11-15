@@ -150,6 +150,7 @@ export class DirtBike {
     this.swing.wheel.spin.rotation.z -= wr * dt;
     this.swing.frontSprocket.rotation.z -=
       wr * (DIM.rearSprocket.teeth / DIM.frontSprocket.teeth) * dt;
+    this.swing.chain.advance(wr * DIM.rearSprocket.radius * dt);
 
     let fComp: number;
     let swingAngle: number;

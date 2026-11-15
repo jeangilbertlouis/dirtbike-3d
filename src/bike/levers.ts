@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { Mats } from './materials';
-import { extrude, mesh, roundedPoly, v3 } from './util';
+import { extrude, mesh, roundedPoly, v3, type Pt } from './util';
 
 /*
  * Handlebar controls, built in a bar-local frame:
@@ -13,7 +13,7 @@ import { extrude, mesh, roundedPoly, v3 } from './util';
 
 const CLAMP_R = 0.0185;
 /** Perches are rotated down around the bar so the blades line up with the rider's fingers. */
-const TILT = THREE.MathUtils.degToRad(26);
+const TILT = THREE.MathUtils.degToRad(18);
 
 export interface BarControl {
   group: THREE.Group;
@@ -93,52 +93,69 @@ function barClamp(m: Mats, width: number, mat: THREE.Material): THREE.Group {
 
 /**
  * Forged lever blade around its pivot (the origin). Top-view outline in
- * (forward, outward) coordinates, extruded vertically, then dog-legged down and
- * tapered toward the tip, which ends in a safety ball.
+ * (forward, outward) coordinates, extruded vertically, then bent: the blade bows
+ * forward and sweeps back toward the grip (so fingers wrap round it), curves
+ * progressively down, and tapers toward the tip, which ends in a safety ball.
  */
 function leverBlade(
   m: Mats,
   length: number,
   drop: number,
+  bow: number,
   tipBack: number,
   thick = 0.011,
 ): THREE.Group {
   const L = length;
   const tb = tipBack;
+  const root = 0.03;
+  const N = 16;
+  // The bend needs vertices along the long edges, so sample them.
+  const edge = (x0: number, s0: number, x1: number, s1: number): Pt[] =>
+    Array.from({ length: N }, (_, i) => {
+      const t = i / (N - 1);
+      return [x0 + (x1 - x0) * t, s0 + (s1 - s0) * t, 0.002];
+    });
   const shape = roundedPoly([
     [0.004, -0.012, 0.008],
     [0.017, -0.002, 0.008],
-    [0.017, 0.034, 0.03],
-    [0.011 - tb, L, 0.004],
-    [0.002 - tb, L, 0.004],
-    [0.005, 0.04, 0.03],
+    ...edge(0.017, 0.03, 0.011 - tb, L - 0.004),
+    [0.011 - tb, L, 0.003],
+    [0.002 - tb, L, 0.003],
+    ...edge(0.002 - tb, L - 0.004, 0.005, 0.04),
     [-0.002, 0.017, 0.01],
     [-0.012, 0.003, 0.006],
     [-0.009, -0.01, 0.006],
   ]);
-  const root = 0.03;
+  /** Bend at outward distance s: forward bow (dx) and downward curve (dy). */
+  const bend = (s: number) => {
+    const u = Math.min(1, Math.max(0, (s - root) / (L - root)));
+    return {
+      u,
+      dx: bow * Math.sin(Math.PI * Math.pow(u, 0.85)) * (1 - 0.25 * u),
+      dy: -drop * Math.pow(u, 1.8),
+    };
+  };
   const blade = extrude(shape, thick, m.leverAlloy, 0.0015, (pos) => {
     for (let i = 0; i < pos.count; i++) {
-      const s = pos.getY(i); // outward
-      const u = Math.max(0, (s - root) / (L - root));
-      // Thinner toward the tip; the dog-leg bends it down (extrusion Z becomes -Y below).
-      const z = pos.getZ(i) * (1 - 0.3 * u) + drop * Math.pow(u, 1.4);
-      pos.setZ(i, z);
+      const { u, dx, dy } = bend(pos.getY(i)); // outline Y = outward
+      pos.setX(i, pos.getX(i) + dx);
+      // Thinner toward the tip; extrusion Z becomes -Y after the rotation below.
+      pos.setZ(i, pos.getZ(i) * (1 - 0.3 * u) - dy);
     }
   });
   blade.geometry.rotateX(Math.PI / 2); // outline Y → +Z (outward), extrusion → vertical
 
   const g = new THREE.Group();
   g.add(blade);
-  // Finger grooves: shallow ribs on the back face of the blade.
-  for (let i = 0; i < 3; i++) {
-    const s = root + 0.03 + i * 0.022;
-    const u = (s - root) / (L - root);
-    // Back face of the blade (outline edge minus its bevel), ribs standing just proud of it.
-    const x = 0.005 - (0.003 + tb) * ((s - 0.04) / (L - 0.04)) - 0.0015 - 0.0004;
-    g.add(box([0.0016, thick * (1 - 0.3 * u) + 0.001, 0.003], 0.0006, m.leverAlloy, v3(x, -drop * Math.pow(u, 1.4), s)));
+  // Finger grooves: shallow ribs standing just proud of the blade's back face.
+  for (let i = 0; i < 4; i++) {
+    const s = root + 0.03 + i * 0.02;
+    const { u, dx, dy } = bend(s);
+    const back = 0.005 - (0.003 + tb) * ((s - 0.04) / (L - 0.04)) - 0.0015 - 0.0004;
+    g.add(box([0.0016, thick * (1 - 0.3 * u) - 0.003, 0.003], 0.0006, m.leverAlloy, v3(back + dx, dy, s)));
   }
-  g.add(mesh(new THREE.SphereGeometry(0.0068, 20, 14), m.leverAlloy).translateX(0.0065 - tb).translateY(-drop).translateZ(L));
+  const tip = bend(L);
+  g.add(mesh(new THREE.SphereGeometry(0.0068, 20, 14), m.leverAlloy).translateX(0.0065 - tb + tip.dx).translateY(tip.dy).translateZ(L));
   return g;
 }
 
@@ -201,7 +218,7 @@ export function createBrakeLever(m: Mats): BarControl {
   const pivot = v3(0.054, 0, 0.016);
   g.add(ears(m.leverBody, 0.04, pivot, 0.022));
   g.add(pivotBolt(m, pivot));
-  const lever = leverBlade(m, 0.15, 0.01, 0.006);
+  const lever = leverBlade(m, 0.15, 0.024, 0.011, 0.008);
   lever.position.copy(pivot);
   g.add(lever);
   g.add(cyl(0.0022, 0.006, m.steel, v3(pivot.x + 0.019, 0, pivot.z - 0.004), 'x', 10));
@@ -238,7 +255,7 @@ export function createClutchLever(m: Mats): BarControl {
   const pivot = v3(0.047, 0, 0.014);
   g.add(ears(m.leverBody, 0.03, pivot, 0.02));
   g.add(pivotBolt(m, pivot));
-  const lever = leverBlade(m, 0.158, 0.013, 0.006);
+  const lever = leverBlade(m, 0.158, 0.028, 0.012, 0.008);
   lever.position.copy(pivot);
   g.add(lever);
   // Inner cable and its nipple seated in the lever.

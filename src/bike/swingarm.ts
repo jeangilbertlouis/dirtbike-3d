@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { createChain, type Chain } from './chain';
 import { DIM, rearAxle } from './dimensions';
 import type { Mats } from './materials';
 import { extrude, mesh, rod, roundedPoly, v3 } from './util';
@@ -10,6 +11,7 @@ export interface Swingarm {
   group: THREE.Group;
   wheel: Wheel;
   frontSprocket: THREE.Object3D;
+  chain: Chain;
   /** Rotation that puts the rear axle at its static position. */
   baseAngle: number;
   length: number;
@@ -98,24 +100,15 @@ export function createSwingarm(m: Mats): Swingarm {
   frontSprocket.position.set(cs.x, cs.y, DIM.chainZ);
   group.add(frontSprocket);
 
-  group.add(createChain(cs, new THREE.Vector2(-L, 0), m));
+  const chain = createChain(
+    cs,
+    DIM.frontSprocket.radius + 0.001,
+    new THREE.Vector2(-L, 0),
+    DIM.rearSprocket.radius + 0.001,
+    DIM.chainZ,
+    m,
+  );
+  group.add(chain.group);
 
-  return { group, wheel, frontSprocket, baseAngle, length: L };
-}
-
-function createChain(front: THREE.Vector2, rear: THREE.Vector2, m: Mats): THREE.Mesh {
-  const r1 = DIM.frontSprocket.radius + 0.002;
-  const r2 = DIM.rearSprocket.radius + 0.002;
-  const z = DIM.chainZ;
-  const pts: THREE.Vector3[] = [];
-  for (let k = 0; k <= 10; k++) {
-    const a = Math.PI / 2 + (k / 10) * Math.PI;
-    pts.push(v3(rear.x + r2 * Math.cos(a), rear.y + r2 * Math.sin(a), z));
-  }
-  for (let k = 0; k <= 6; k++) {
-    const a = -Math.PI / 2 + (k / 6) * Math.PI;
-    pts.push(v3(front.x + r1 * Math.cos(a), front.y + r1 * Math.sin(a), z));
-  }
-  const curve = new THREE.CatmullRomCurve3(pts, true, 'centripetal');
-  return mesh(new THREE.TubeGeometry(curve, 260, 0.0055, 6, true), m.chain);
+  return { group, wheel, frontSprocket, chain, baseAngle, length: L };
 }

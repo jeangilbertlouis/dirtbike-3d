@@ -43,6 +43,7 @@ export function createMaterials() {
     hose: std({ color: '#17181a', roughness: 0.55, metalness: 0.15 }),
     disc: std({ color: '#b8bcc2', metalness: 1, roughness: 0.3 }),
     chain: std({ color: '#3c3f44', metalness: 0.9, roughness: 0.45 }),
+    chainGold: std({ color: '#c99a3e', metalness: 1, roughness: 0.32 }),
     spring: std({ color: '#e8c32a', metalness: 0.3, roughness: 0.35 }),
     shockBody: std({ color: '#2e3036', metalness: 0.8, roughness: 0.3 }),
 
