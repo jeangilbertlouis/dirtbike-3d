@@ -119,3 +119,8 @@ The bike rides itself over rough terrain; the camera still orbits freely.
   - asymmetric damping — rebound much stiffer than compression, like a real shock,
   - a simple rider model: in the air (and partly with one wheel down) body weight and throttle/brake steer pitch toward the slope of the ground below, so the bike lands matching the landing.
   - Result on the double: front 1.84 m / rear 1.88 m of air, pitch −5° to +28°, landing within ~5° of the slope.
+
+### Phase 7 — Damped suspension with unsprung wheels ✅ done
+- Each wheel now has its own mass (front 6.5 %, rear 8.5 % of bike + rider) and rides on a tyre spring (~11× the suspension spring). Previously the wheels snapped to the ground or to full extension instantly.
+- The damper acts on stroke speed whether or not the tyre is touching, so in the air the forks extend at the rebound-damped rate (≈1 m/s) instead of in a single frame (≈11 m/s). It is digressive (blows off above 0.6 m/s compression / 0.8 m/s rebound), adds hydraulic bottoming in the last 4 cm, and is solved implicitly on the wheel so stiff settings stay stable. Topping out transfers the wheel's momentum into the chassis.
+- **Suspension** folder in the GUI: compression and rebound damping, live. Defaults (12 / 10) tuned so the motocross track no longer bottoms out (was 53 frames per 40 s), peak hits drop from 10 g to 7.8 g, and the double still gives balanced front/rear air (1.9 m / 2.0 m, pitch −6° to +28°).

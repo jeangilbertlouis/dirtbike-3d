@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 import GUI from 'lil-gui';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { BikeMode, DirtBike } from '../bike/DirtBike';
+import { DEFAULT_DAMPING, type BikeMode, type DirtBike } from '../bike/DirtBike';
 import type { Mats } from '../bike/materials';
 import { resetCamera } from '../controls/orbit';
 import { PRESETS } from '../terrain/presets';
@@ -60,6 +60,16 @@ export function createGui({
   anim.add(bike.state, 'steer', -35, 35, 1).name('steering (°)');
   bounce.enable(bike.state.mode === 'showroom');
   rough.enable(bike.state.mode === 'ride');
+
+  const susp = gui.addFolder('Suspension');
+  susp.add(bike.damping, 'compression', 0, 20, 0.5).name('compression damping');
+  susp.add(bike.damping, 'rebound', 0, 40, 0.5).name('rebound damping');
+  const resetDamping = () => {
+    Object.assign(bike.damping, DEFAULT_DAMPING);
+    susp.controllers.forEach((c) => c.updateDisplay());
+  };
+  susp.add({ reset: resetDamping }, 'reset').name('reset damping');
+  susp.close();
 
   const colorGroups: Record<string, THREE.MeshStandardMaterial[]> = {
     plastics: [m.plastic, m.plasticDS],

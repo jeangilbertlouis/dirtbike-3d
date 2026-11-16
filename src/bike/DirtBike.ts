@@ -44,25 +44,74 @@ export interface ContactInfo {
 const FRONT_TRAVEL = 0.045; // m of fork travel
 const REAR_TRAVEL = 0.07; // rad of swingarm rotation
 
-// Ride model: a sprung chassis (heave + pitch) on two wheels that follow the ground.
-// All forces are per unit mass. Vertical displacements are relative to static sag.
+// Ride model: a sprung chassis (heave + pitch) on two suspension units, each with
+// its own unsprung mass (wheel, brake, fork lowers / swingarm share) riding on a
+// springy tyre. All forces are per unit of total bike + rider mass.
 const G = 9.81;
-const K = 79; // spring rate per wheel → ~2 Hz body bounce
-// Real shocks damp rebound far more than compression; without that the rear spring
-// dumps its stored energy at a jump lip and flips the tail up.
-const C_COMPRESSION = 6;
-const C_REBOUND = 16;
-const D0 = G / (2 * K); // static sag: each spring carries half the weight
-const EXTENSION = 0.11; // wheel can drop this far below static sag before leaving the ground
-const TRAVEL_F = 0.22; // vertical bump travel before bottoming out
+const MU_F = 0.065; // front unsprung mass fraction
+const MU_R = 0.085; // rear unsprung mass fraction
+const MS = 1 - MU_F - MU_R; // sprung mass fraction
+const K = 79; // spring rate per wheel -> ~2 Hz body bounce
+const D0 = (MS * G) / (2 * K); // static sag: each spring carries half the sprung weight
+const EXTENSION = 0.11; // stroke available below static sag (top-out)
+const TRAVEL_F = 0.22; // stroke above static sag before the bump stop
 const TRAVEL_R = 0.25;
 const K_BOTTOM = 2500; // bump-stop stiffness
-const RG2 = 0.45; // pitch radius of gyration² (m²) of bike + rider (~0.67 m)
+const C_BOTTOM = 60; // hydraulic bottoming: extra compression damping in the last 4 cm
+const K_TIRE = 900; // tyre vertical stiffness, ~11x the spring
+const C_TIRE = 3; // tyre damping
+/** Static tyre squash at a wheel with unsprung fraction `mu`. */
+const tireSag = (mu: number) => ((MS * G) / 2 + mu * G) / K_TIRE;
+// Dampers are digressive: above the knee speed the shim stack opens and the force
+// rises more slowly, so sharp hits are absorbed without the bike feeling rigid.
+const KNEE_COMP = 0.6; // m/s
+const KNEE_REB = 0.8;
+const BLOWOFF = 0.4; // slope above the knee, relative to below it
+const RG2 = 0.45; // pitch radius of gyration squared (m^2) of bike + rider (~0.67 m)
 // Rider in the air: body weight and throttle/brake steer pitch toward the ground slope
 // below, so the bike lands roughly parallel to the landing instead of nose-diving.
-const RIDER_K = 14; // rad/s² per rad of pitch error
+const RIDER_K = 14; // rad/s^2 per rad of pitch error
 const RIDER_C = 6; // 1/s pitch-rate damping
 const SUBSTEP = 1 / 240;
+
+/** Damper settings (per unit mass). Tunable from the GUI. */
+export interface Damping {
+  /** Low-speed compression damping. */
+  compression: number;
+  /**
+   * Low-speed rebound damping. Also sets how fast the wheels extend in the air and
+   * drop into dips: too much and they skip over the ground ("packing down").
+   */
+  rebound: number;
+}
+
+/**
+ * Tuned on the three terrains: no bottoming on the motocross jumps, balanced
+ * front/rear air off the double, and only small skips over crests at speed.
+ */
+export const DEFAULT_DAMPING: Damping = { compression: 12, rebound: 10 };
+
+/** Damper force for stroke speed v (positive = compressing). */
+function damperForce(v: number, d: Damping): number {
+  if (v >= 0) {
+    const c = d.compression;
+    return v < KNEE_COMP ? c * v : c * (KNEE_COMP + BLOWOFF * (v - KNEE_COMP));
+  }
+  const c = d.rebound;
+  const u = -v;
+  return -(u < KNEE_REB ? c * u : c * (KNEE_REB + BLOWOFF * (u - KNEE_REB)));
+}
+
+/** One suspension unit: wheel (axle) height and vertical speed in world space. */
+interface Wheel {
+  y: number;
+  v: number;
+  /** Axle height at which the tyre just touches the ground, last substep. */
+  prevT: number;
+  /** Stroke relative to static sag (+ = compressed). */
+  s: number;
+  touching: boolean;
+}
 
 /**
  * Assembles the procedural parts into one rig:
@@ -92,7 +141,17 @@ export class DirtBike {
   private shockPart: Part;
   private time = 0;
   private explodeEased = 0;
-  private ride = { init: false, Y: 0, V: 0, th: 0, W: 0, prevF: 0, prevR: 0 };
+  /** Suspension damper settings; edit live. */
+  readonly damping: Damping = { ...DEFAULT_DAMPING };
+  private ride = {
+    init: false,
+    Y: 0,
+    V: 0,
+    th: 0,
+    W: 0,
+    f: { y: 0, v: 0, prevT: 0, s: 0, touching: true } as Wheel,
+    r: { y: 0, v: 0, prevT: 0, s: 0, touching: true } as Wheel,
+  };
 
   constructor(m: Mats) {
     this.root.name = 'DirtBike';
@@ -198,11 +257,19 @@ export class DirtBike {
   }
 
   /**
-   * Integrates chassis heave/pitch over the terrain and returns the rig's
-   * fork compression (along the steering axis) and swingarm angle.
+   * Integrates the sprung chassis (heave + pitch) and both unsprung wheels over
+   * the terrain, and returns the rig's fork compression (along the steering axis)
+   * and swingarm angle.
+   *
+   * Each suspension unit is a spring and damper between the chassis and its wheel;
+   * the wheel rides on a tyre spring over the ground. The damper acts on stroke
+   * speed whether or not the tyre is touching, so in the air the forks extend at
+   * the rebound-damped rate instead of snapping open. The damper term is solved
+   * implicitly on the light wheel, so stiff settings stay stable.
    */
   private stepRide(dt: number, v: number, ground: (x: number) => number) {
     const r = this.ride;
+    const d = this.damping;
     const rf = DIM.front.radius;
     const rr = DIM.rear.radius;
     const fx = frontAxle.x;
@@ -219,67 +286,112 @@ export class DirtBike {
       }
       return best;
     };
-    const force = (d: number, dd: number, travel: number) => {
-      if (d < -D0) return 0; // spring fully extended: no push
-      let f = K * (d + D0) + (dd > 0 ? C_COMPRESSION : C_REBOUND) * dd;
-      if (d > travel) f += K_BOTTOM * (d - travel);
-      return Math.max(0, f);
+    // Where the axle would be at static sag, and how fast that point is moving.
+    const mount = (x: number, y: number) => {
+      const sn = Math.sin(r.th);
+      const cs = Math.cos(r.th);
+      return { y: x * sn + y * cs + r.Y, v: r.V + r.W * (x * cs - y * sn) };
     };
 
     if (!r.init) {
-      const tf = contactY(fx, rf) - fy;
-      const tr = contactY(rx, rr) - ry;
-      Object.assign(r, { init: true, Y: (tf + tr) / 2, V: 0, th: (tf - tr) / (fx - rx), W: 0, prevF: 0, prevR: 0 });
+      const tf = contactY(fx, rf);
+      const tr = contactY(rx, rr);
+      r.Y = (tf - fy + tr - ry) / 2;
+      r.th = (tf - fy - (tr - ry)) / (fx - rx);
+      r.V = r.W = 0;
+      Object.assign(r.f, { y: tf - tireSag(MU_F), v: 0, prevT: tf, s: 0, touching: true });
+      Object.assign(r.r, { y: tr - tireSag(MU_R), v: 0, prevT: tr, s: 0, touching: true });
+      r.init = true;
     }
+
+    /** Advance one wheel by h; returns the suspension force it puts on the chassis. */
+    const stepWheel = (w: Wheel, x: number, y: number, rad: number, mu: number, travel: number, h: number) => {
+      const T = contactY(x, rad);
+      const m = mount(x, y);
+      const s = w.y - m.y;
+      const sv = w.v - m.v;
+
+      // Tyre: a stiff spring (preloaded by its static squash) that can only push.
+      const pen = T - w.y + tireSag(mu);
+      const tyreV = (T - w.prevT) / h - w.v;
+      w.prevT = T;
+      w.touching = pen > 0;
+      const fTyre = w.touching ? Math.max(0, K_TIRE * pen + C_TIRE * tyreV) : 0;
+
+      // Spring (pushes only once compressed past its free length) and bump stop.
+      let fSpring = s > -D0 ? K * (s + D0) : 0;
+      if (s > travel) fSpring += K_BOTTOM * (s - travel);
+
+      // Damper, linearised about the current stroke speed and solved implicitly.
+      let c = Math.abs(sv) > 1e-4 ? damperForce(sv, d) / sv : sv >= 0 ? d.compression : d.rebound;
+      if (sv > 0) c += C_BOTTOM * THREE.MathUtils.smoothstep(s, travel - 0.04, travel);
+      const nv = (w.v + (h * (fTyre - fSpring - mu * G + c * m.v)) / mu) / (1 + (h * c) / mu);
+      const fDamper = c * (nv - m.v);
+      w.v = nv;
+      w.y += nv * h;
+      return fSpring + fDamper;
+    };
+
+    /**
+     * Hard stops at full extension and just past the bump stop: the wheel is carried
+     * with the chassis, and the momentum it had relative to it goes into the chassis
+     * (the clunk when a fork tops out).
+     */
+    const limit = (w: Wheel, x: number, y: number, mu: number, travel: number) => {
+      const m = mount(x, y);
+      w.s = w.y - m.y;
+      const lo = -EXTENSION;
+      const hi = travel + 0.03;
+      if (w.s >= lo && w.s <= hi) return;
+      w.s = THREE.MathUtils.clamp(w.s, lo, hi);
+      w.y = m.y + w.s;
+      const J = (mu * (w.v - m.v)) / MS; // velocity change of the sprung mass
+      r.V += J;
+      r.W += (J * x) / RG2;
+      w.v = m.v;
+    };
 
     const steps = Math.max(1, Math.ceil(dt / SUBSTEP));
     const h = dt / steps;
-    let dF = 0;
-    let dR = 0;
-    let Tf = 0;
-    let Tr = 0;
     for (let i = 0; i < steps; i++) {
       this.distance += v * h;
-      const sn = Math.sin(r.th);
-      const cs = Math.cos(r.th);
-      Tf = contactY(fx, rf);
-      Tr = contactY(rx, rr);
-      dF = Tf - (fx * sn + fy * cs + r.Y);
-      dR = Tr - (rx * sn + ry * cs + r.Y);
-      const fF = force(dF, (dF - r.prevF) / h, TRAVEL_F);
-      const fR = force(dR, (dR - r.prevR) / h, TRAVEL_R);
-      r.prevF = dF;
-      r.prevR = dR;
-      r.V += (fF + fR - G) * h;
+      const fF = stepWheel(r.f, fx, fy, rf, MU_F, TRAVEL_F, h);
+      const fR = stepWheel(r.r, rx, ry, rr, MU_R, TRAVEL_R, h);
+
+      r.V += ((fF + fR) / MS - G) * h;
       r.Y += r.V * h;
-      let alpha = ((fF - fR) * fx) / RG2;
+      let alpha = (fF * fx + fR * rx) / (MS * RG2);
       // Rider control: full authority with both wheels off the ground,
       // most while only one wheel is touching (the moment the bike leaves a lip or lands).
-      const offF = dF < -EXTENSION;
-      const offR = dR < -EXTENSION;
-      if (offF || offR) {
-        const slope = Math.atan2(Tf - fy - (Tr - ry), fx - rx);
-        const authority = offF && offR ? 1 : 0.65;
+      if (!r.f.touching || !r.r.touching) {
+        const slope = Math.atan2(r.f.prevT - fy - (r.r.prevT - ry), fx - rx);
+        const authority = !r.f.touching && !r.r.touching ? 1 : 0.65;
         alpha += authority * (-RIDER_K * (r.th - slope) - RIDER_C * r.W);
       }
       r.W += alpha * h;
       r.th += r.W * h;
+
+      limit(r.f, fx, fy, MU_F, TRAVEL_F);
+      limit(r.r, rx, ry, MU_R, TRAVEL_R);
     }
 
     this.chassis.position.y = r.Y;
     this.chassis.rotation.z = r.th;
-    this.contact.front = dF > -EXTENSION;
-    this.contact.rear = dR > -EXTENSION;
+    const Tf = r.f.prevT;
+    const Tr = r.r.prevT;
+    this.contact.front = r.f.touching;
+    this.contact.rear = r.r.touching;
     this.contact.frontGroundY = Tf - rf;
     this.contact.rearGroundY = Tr - rr;
-    this.contact.frontGap = Math.max(0, -(dF + EXTENSION));
-    this.contact.rearGap = Math.max(0, -(dR + EXTENSION));
+    this.contact.frontGap = Math.max(0, r.f.y - Tf);
+    this.contact.rearGap = Math.max(0, r.r.y - Tr);
 
-    // Map vertical wheel displacement back onto the rig.
+    // Map stroke onto the rig: the fork slides along the steering axis, and the
+    // swingarm swings to wherever the rear axle actually is.
+    const fComp = THREE.MathUtils.clamp(r.f.s, -EXTENSION, TRAVEL_F) / Math.cos(DIM.rake + r.th);
     const sn = Math.sin(r.th);
     const cs = Math.cos(r.th);
-    const fComp = THREE.MathUtils.clamp(dF, -EXTENSION, TRAVEL_F) / Math.cos(DIM.rake + r.th);
-    const rearY = rx * sn + ry * cs + r.Y + THREE.MathUtils.clamp(dR, -EXTENSION, TRAVEL_R);
+    const rearY = mount(rx, ry).y + THREE.MathUtils.clamp(r.r.s, -EXTENSION, TRAVEL_R);
     const P = DIM.swingarmPivot;
     const k = P.x * sn + P.y * cs + r.Y;
     const swingAngle =
